@@ -8,7 +8,7 @@ REQUEST_PAYLOAD = {"query": "Which animals can hover in the air?", "k": 2}
 
 def send_request(payload):
     start_time = time.time()
-    response = requests.post("http://localhost:8000/rag", json=payload)
+    response = requests.post("http://localhost:8145/rag", json=payload)
     elapsed = time.time() - start_time
     if response.status_code == 200:
         print(f"Finished request in {elapsed:.3f}s.  Result: {response.json()['result'][:50]}...")
