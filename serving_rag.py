@@ -20,7 +20,7 @@ documents = [
 
 # 1. Load embedding model
 EMBED_MODEL_NAME = "intfloat/multilingual-e5-large-instruct"
-embed_tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL_NAME, use_fast=False))
+embed_tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL_NAME, use_fast=False)
 embed_model = AutoModel.from_pretrained(EMBED_MODEL_NAME)
 embed_model.to(devicee)
 
