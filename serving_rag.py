@@ -25,9 +25,9 @@ embed_model = AutoModel.from_pretrained(EMBED_MODEL_NAME)
 embed_model.to(devicee)
 
 # Basic Chat LLM
-#chat_pipeline = pipeline("text-generation", model="facebook/opt-125m", device=0)
+chat_pipeline = pipeline("text-generation", model="facebook/opt-125m", device=devicee)
 # Note: try this 1.5B model if you got enough GPU memory
-chat_pipeline = pipeline("text-generation", model="Qwen/Qwen2.5-1.5B-Instruct", device=devicee)
+#chat_pipeline = pipeline("text-generation", model="Qwen/Qwen2.5-1.5B-Instruct", device=devicee)
 
 
 
