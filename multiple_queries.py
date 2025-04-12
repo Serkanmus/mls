@@ -14,29 +14,28 @@ error_count = 0
 lock = threading.Lock()
 
 def send_request(payload):
-    global error_count
     start_time = time.time()
-    
     try:
-        response = requests.post("http://localhost:8100/rag", json=payload)
+        response = requests.post("http://<your-load-balancer>:8000/rag", json=payload)
     except Exception as e:
-        # Record the time even when exceptions occur.
         elapsed = time.time() - start_time
-        with lock:
-            response_times.append(elapsed)
-            error_count += 1
         print(f"Request exception: {e}, took {elapsed:.3f}s")
         return
-    
+
     elapsed = time.time() - start_time
-    with lock:
-        response_times.append(elapsed)
-    if response.status_code == 200:
-        print(f"Finished request in {elapsed:.3f}s. Result: {response.json()['result'][:50]}...")
+    try:
+        res_json = response.json()
+    except Exception as e:
+        print(f"Failed to parse JSON response: {response.text}")
+        return
+
+    if "result" in res_json:
+        print(f"Finished request in {elapsed:.3f}s. Result: {res_json['result'][:50]}...")
+    elif "error" in res_json:
+        print(f"Finished request in {elapsed:.3f}s. Error: {res_json['error']}")
     else:
-        with lock:
-            error_count += 1
-        print(f"Error: {response.status_code}, took {elapsed:.3f}s")
+        print(f"Finished request in {elapsed:.3f}s. Unexpected response: {res_json}")
+
 
 threads = []
 for i in range(NUM_PARALLEL_REQUESTS):
