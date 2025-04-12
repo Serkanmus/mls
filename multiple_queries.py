@@ -5,7 +5,7 @@ import statistics
 import numpy as np
 
 # Adjust these values to your liking:
-NUM_PARALLEL_REQUESTS = 1000
+NUM_PARALLEL_REQUESTS = 50
 REQUEST_PAYLOAD = {"query": "Which animals can hover in the air?", "k": 2}
 
 # Shared lists/variables for recording metrics.
@@ -18,7 +18,7 @@ def send_request(payload):
     start_time = time.time()
     
     try:
-        response = requests.post("http://localhost:8147/rag", json=payload)
+        response = requests.post("http://localhost:8100/rag", json=payload)
     except Exception as e:
         # Record the time even when exceptions occur.
         elapsed = time.time() - start_time

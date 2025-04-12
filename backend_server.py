@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
@@ -10,15 +11,20 @@ import time
 from concurrent.futures import Future
 from prometheus_client import Counter, Histogram, start_http_server
 import logging
+import argparse
 
+# -------------------
 # Logging Setup
+# -------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
+# -------------------
 # Metrics Setup
+# -------------------
 request_count = Counter('rag_requests_total', 'Total RAG requests received')
 batch_duration = Histogram('rag_batch_processing_seconds', 'Time spent processing each batch')
 batch_size_histogram = Histogram('rag_batch_size', 'Sizes of processed batches')
@@ -26,16 +32,20 @@ request_latency = Histogram('rag_request_total_latency_seconds', 'Overall reques
 embedding_duration = Histogram('rag_embedding_processing_seconds', 'Time spent during query embedding')
 generation_duration = Histogram('rag_generation_processing_seconds', 'Time spent during text generation')
 
-# Start metrics server
+# Start Prometheus metrics server on port 9100
 start_http_server(9100)
 
+# -------------------
 # Batcher Hyperparameters
+# -------------------
 NUM_WORKERS = 1
-MAX_BATCH_SIZE = 32  # Set maximum batch size to 128
-MAX_WAITING_TIME = 0.2  # Adjust waiting time as desired
+MAX_BATCH_SIZE = 32
+MAX_WAITING_TIME = 0.2
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# Sample documents and model/tokenizer setup
+# -------------------
+# Documents and Model Setup
+# -------------------
 documents = [
     "Cats are small furry carnivores that are often kept as pets.",
     "Dogs are domesticated mammals, not natural wild animals.",
@@ -104,7 +114,9 @@ def rag_pipeline_batch(queries: list[str], k: int = 2) -> list[str]:
     generated_texts = batch_generation(prompts, max_new_tokens=50)
     return generated_texts
 
+# -------------------
 # FastAPI and Batching Implementation
+# -------------------
 app = FastAPI()
 request_queue = queue.Queue()
 
@@ -112,11 +124,11 @@ def batch_worker():
     while True:
         batch_items = []
         start_time = time.time()
-        # Block until at least one item is available.
+        # Block until at least one request is available.
         first_item = request_queue.get()
         batch_items.append(first_item)
 
-        # Collect additional requests until reaching MAX_BATCH_SIZE or timeout.
+        # Try to form a larger batch until MAX_BATCH_SIZE or timeout.
         while len(batch_items) < MAX_BATCH_SIZE:
             elapsed = time.time() - start_time
             if elapsed > MAX_WAITING_TIME:
@@ -130,7 +142,6 @@ def batch_worker():
         batch_size = len(batch_items)
         batch_size_histogram.observe(batch_size)
         logging.info(f"[BATCH WORKER] Formed batch of size {batch_size} (Queue size: {request_queue.qsize()})")
-        # Log inter-request waiting time to debug arrival rate.
         logging.info(f"[BATCH WORKER] Time elapsed while batching: {time.time() - start_time:.3f}s")
 
         queries = [item[0].query for item in batch_items]
@@ -155,7 +166,7 @@ class QueryRequest(BaseModel):
     query: str
     k: int = 2
 
-# Start multiple batch workers.
+# Start the batch worker(s).
 for i in range(NUM_WORKERS):
     threading.Thread(target=batch_worker, name=f"Worker-{i+1}", daemon=True).start()
 
@@ -175,16 +186,22 @@ def predict(payload: QueryRequest):
     fut = Future()
     request_queue.put((payload, fut))
     try:
-        result = fut.result()  # Wait for batch processing to complete.
+        result = fut.result()
     except Exception as e:
         logging.error(f"Error processing query '{payload.query}': {e}")
         return {"error": str(e)}
 
     total_latency = time.time() - start_time
     request_latency.observe(total_latency)
-    logging.info(f"[RESPONSE] Completed query: '{payload.query}' with total latency: {total_latency:.3f} seconds")
+    logging.info(f"[RESPONSE] Completed query: '{payload.query}' with total latency: {total_latency:.3f}s")
     return {"query": payload.query, "result": result}
 
+# -------------------
+# Entry Point: Parse Port and Run Server
+# -------------------
 if __name__ == "__main__":
-    logging.info("[SERVER] Starting RAG server on port 8147")
-    uvicorn.run(app, host="0.0.0.0", port=8147)
+    parser = argparse.ArgumentParser(description="Backend RAG Server")
+    parser.add_argument("--port", type=int, default=8147, help="Port number to run the server on")
+    args = parser.parse_args()
+    logging.info(f"[SERVER] Starting RAG server on port {args.port}")
+    uvicorn.run(app, host="0.0.0.0", port=args.port)

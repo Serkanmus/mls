@@ -5,7 +5,7 @@ import statistics
 import numpy as np
 
 # Parameters
-REQUESTS_PER_SECOND = 50       # Send 50 requests each second
+REQUESTS_PER_SECOND = 5       # Send 50 requests each second
 DURATION_SECONDS = 20          # Total duration (in seconds) to send requests
 TOTAL_REQUESTS = REQUESTS_PER_SECOND * DURATION_SECONDS  # 50 * 20 = 1000 requests
 
@@ -22,7 +22,7 @@ def send_request(payload):
     global error_count
     start_time = time.time()
     try:
-        response = requests.post("http://localhost:8147/rag", json=payload)
+        response = requests.post("http://localhost:8100/rag", json=payload)
     except Exception as e:
         elapsed = time.time() - start_time
         with lock:
