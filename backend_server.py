@@ -12,6 +12,7 @@ from concurrent.futures import Future
 from prometheus_client import Counter, Histogram, start_http_server
 import logging
 import argparse
+import socket
 
 # -------------------
 # Logging Setup
@@ -21,6 +22,20 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+# -------------------
+# Helper function to get the current IP address.
+# -------------------
+def get_my_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
 
 # -------------------
 # Metrics Setup
@@ -203,5 +218,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backend RAG Server")
     parser.add_argument("--port", type=int, default=8147, help="Port number to run the server on")
     args = parser.parse_args()
-    logging.info(f"[SERVER] Starting RAG server on port {args.port}")
-    uvicorn.run(app, host="129.215.18.53", port=args.port)
+    ip = get_my_ip()
+    logging.info(f"[SERVER] Starting RAG server on {ip}:{args.port}")
+    uvicorn.run(app, host=ip, port=args.port)

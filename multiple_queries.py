@@ -3,6 +3,7 @@ import threading
 import time
 import statistics
 import numpy as np
+import socket
 
 # Adjust these values to your liking:
 NUM_PARALLEL_REQUESTS = 50
@@ -13,13 +14,30 @@ response_times = []
 error_count = 0
 lock = threading.Lock()
 
+
+def get_my_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+# Use the dynamically determined IP in your URL:
+SERVER_IP = get_my_ip()
+SERVER_URL = f"http://{SERVER_IP}:8100/rag"
+
+
 def send_request(payload):
     global error_count
     start_time = time.time()
     try:
         # Modify the URL as needed; here we use port 8147 as an example.
         # response = requests.post("http://localhost:8147/rag", json=payload)
-        response = requests.post("http://129.215.18.53:8100/rag", json=payload)
+        response = requests.post(SERVER_URL, json=payload)
 
     except Exception as e:
         elapsed = time.time() - start_time

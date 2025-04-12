@@ -7,6 +7,7 @@ import threading
 import time
 import subprocess
 import logging
+import socket
 
 # -------------------
 # Logging Setup
@@ -19,8 +20,23 @@ logging.basicConfig(
 
 app = FastAPI()
 
+# -------------------
+# Helper function to get the current IP address.
+# -------------------
+def get_my_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # This does not actually send data.
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
 # Global list of backend servers.
-# Each backend is a dict: {"url": "http://127.0.0.1:port", "port": port, "process": process_object}
+# Each backend is a dict: {"url": "http://<ip>:port", "port": port, "process": process_object}
 backend_servers = []
 backend_lock = threading.Lock()
 
@@ -61,7 +77,6 @@ def get_next_backend():
 @app.post("/rag")
 async def route_request(payload: QueryRequest, req: Request):
     global request_count
-    # Increase the request counter for autoscaling.
     with request_count_lock:
         request_count += 1
 
@@ -82,7 +97,8 @@ def add_backend():
         cmd = ["python", "backend_server.py", "--port", str(next_port)]
         process = subprocess.Popen(cmd)
         time.sleep(1)  # Give the new backend time to start up.
-        backend = {"url": f"http://127.0.0.1:{next_port}", "port": next_port, "process": process}
+        ip = get_my_ip()
+        backend = {"url": f"http://{ip}:{next_port}", "port": next_port, "process": process}
         backend_servers.append(backend)
         logging.info(f"[Autoscaler] Added backend on port {next_port}. Total backends: {len(backend_servers)}")
 
@@ -124,7 +140,7 @@ if __name__ == "__main__":
     # Launch the autoscaler thread.
     scaler_thread = threading.Thread(target=autoscaler, daemon=True)
     scaler_thread.start()
-    # Run the load balancer on your chosen port (here we use 8100).
-    logging.info("[Cluster Manager] Starting load balancer on port 8100")
-    # uvicorn.run(app, host="0.0.0.0", port=8100)
-    uvicorn.run(app, host="129.215.18.53", port=8100)
+    # Run the load balancer on port 8100, using the dynamically determined IP.
+    ip = get_my_ip()
+    logging.info(f"[Cluster Manager] Starting load balancer on {ip}:8100")
+    uvicorn.run(app, host=ip, port=8100)
