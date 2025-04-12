@@ -5,15 +5,12 @@ from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 from fastapi import FastAPI
 import uvicorn
 from pydantic import BaseModel
-import threading
-import queue
 import time
-from concurrent.futures import Future
+import asyncio
 from prometheus_client import Counter, Histogram, start_http_server
 import logging
 import argparse
 import socket
-import asyncio
 
 # -------------------
 # Logging Setup
@@ -24,9 +21,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-# -------------------
-# Helper function to get the current IP address.
-# -------------------
 def get_my_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -39,6 +33,11 @@ def get_my_ip():
     return ip
 
 # -------------------
+# Start Prometheus metrics server on port 9100
+# -------------------
+start_http_server(9100)
+
+# -------------------
 # Metrics Setup
 # -------------------
 request_count = Counter('rag_requests_total', 'Total RAG requests received')
@@ -48,16 +47,22 @@ request_latency = Histogram('rag_request_total_latency_seconds', 'Overall reques
 embedding_duration = Histogram('rag_embedding_processing_seconds', 'Time spent during query embedding')
 generation_duration = Histogram('rag_generation_processing_seconds', 'Time spent during text generation')
 
-# Start Prometheus metrics server on port 9100
-start_http_server(9100)
-
 # -------------------
 # Batcher Hyperparameters
 # -------------------
 NUM_WORKERS = 1
 MAX_BATCH_SIZE = 32
-MAX_WAITING_TIME = 0.2
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+MAX_WAITING_TIME = 1.0  # Increased timeout for more accumulation
+
+# -------------------
+# Parse command line arguments for port and GPU index.
+# -------------------
+parser = argparse.ArgumentParser(description="Backend RAG Server")
+parser.add_argument("--port", type=int, default=8147, help="Port number to run the server on")
+parser.add_argument("--gpu", type=int, default=0, help="GPU index to use")  # New argument for GPU index
+args = parser.parse_args()
+DEVICE = f"cuda:{args.gpu}" if torch.cuda.is_available() else 'cpu'
+logging.info(f"[SERVER] Using device: {DEVICE}")
 
 # -------------------
 # Documents and Model Setup
@@ -131,74 +136,64 @@ def rag_pipeline_batch(queries: list[str], k: int = 2) -> list[str]:
     return generated_texts
 
 # -------------------
-# FastAPI and Batching Implementation
+# Asynchronous Batching with asyncio.Queue
 # -------------------
 app = FastAPI()
-request_queue = queue.Queue()
-
-def batch_worker():
-    while True:
-        batch_items = []
-        start_time = time.time()
-        # Block until at least one request is available.
-        first_item = request_queue.get()
-        batch_items.append(first_item)
-        # Try to form a larger batch until MAX_BATCH_SIZE or timeout.
-        while len(batch_items) < MAX_BATCH_SIZE:
-            elapsed = time.time() - start_time
-            if elapsed > MAX_WAITING_TIME:
-                break
-            try:
-                item = request_queue.get(timeout=MAX_WAITING_TIME - elapsed)
-                batch_items.append(item)
-            except queue.Empty:
-                break
-        batch_size = len(batch_items)
-        batch_size_histogram.observe(batch_size)
-        logging.info(f"[BATCH WORKER] Formed batch of size {batch_size} (Queue size: {request_queue.qsize()})")
-        logging.info(f"[BATCH WORKER] Time elapsed while batching: {time.time() - start_time:.3f}s")
-        queries = [item[0].query for item in batch_items]
-        ks = [item[0].k for item in batch_items]
-        k_for_batch = ks[0]
-        try:
-            with batch_duration.time():
-                results = rag_pipeline_batch(queries, k=k_for_batch)
-        except Exception as e:
-            logging.exception("Error during batch processing")
-            for item in batch_items:
-                future_obj = item[1]
-                future_obj.set_exception(e)
-            continue
-        for item, output in zip(batch_items, results):
-            future_obj = item[1]
-            future_obj.set_result(output)
+request_queue = asyncio.Queue()
 
 class QueryRequest(BaseModel):
     query: str
     k: int = 2
 
-# Start the batch worker(s).
-for i in range(NUM_WORKERS):
-    threading.Thread(target=batch_worker, name=f"Worker-{i+1}", daemon=True).start()
+async def batch_worker():
+    while True:
+        batch_items = []
+        start_time = asyncio.get_running_loop().time()
+        first_item = await request_queue.get()
+        batch_items.append(first_item)
+        while len(batch_items) < MAX_BATCH_SIZE:
+            remaining = MAX_WAITING_TIME - (asyncio.get_running_loop().time() - start_time)
+            if remaining <= 0:
+                break
+            try:
+                item = await asyncio.wait_for(request_queue.get(), timeout=remaining)
+                batch_items.append(item)
+            except asyncio.TimeoutError:
+                break
+        batch_size = len(batch_items)
+        batch_size_histogram.observe(batch_size)
+        logging.info(f"[BATCH WORKER] Formed batch of size {batch_size} (Queue size: {request_queue.qsize()})")
+        logging.info(f"[BATCH WORKER] Time elapsed while batching: {asyncio.get_running_loop().time() - start_time:.3f}s")
+        queries = [item[0].query for item in batch_items]
+        ks = [item[0].k for item in batch_items]
+        k_for_batch = ks[0]
+        try:
+            results = await asyncio.to_thread(rag_pipeline_batch, queries, k_for_batch)
+        except Exception as e:
+            logging.exception("Error during batch processing")
+            for item in batch_items:
+                item[1].set_exception(e)
+            continue
+        for item, output in zip(batch_items, results):
+            item[1].set_result(output)
 
-def init_doc_embeddings():
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(batch_worker())
     global doc_embeddings
     logging.info("[INIT] Computing static document embeddings")
     doc_embeddings = get_embedding_batch(documents)
 
-init_doc_embeddings()
-
-# Here's the key change: we mark the endpoint as async and use asyncio.to_thread to run blocking code.
 @app.post("/rag")
 async def predict(payload: QueryRequest):
     logging.info(f"[REQUEST] Received query: '{payload.query}'")
     start_time = time.time()
     request_count.inc()
-    fut = Future()
-    request_queue.put((payload, fut))
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    await request_queue.put((payload, fut))
     try:
-        # Offload the blocking Future result waiting to a thread
-        result = await asyncio.to_thread(fut.result)
+        result = await fut
     except Exception as e:
         logging.error(f"Error processing query '{payload.query}': {e}")
         return {"error": str(e)}
@@ -207,13 +202,7 @@ async def predict(payload: QueryRequest):
     logging.info(f"[RESPONSE] Completed query: '{payload.query}' with total latency: {total_latency:.3f}s")
     return {"query": payload.query, "result": result}
 
-# -------------------
-# Entry Point: Parse Port and Run Server
-# -------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backend RAG Server")
-    parser.add_argument("--port", type=int, default=8147, help="Port number to run the server on")
-    args = parser.parse_args()
     ip = get_my_ip()
     logging.info(f"[SERVER] Starting RAG server on {ip}:{args.port}")
     uvicorn.run(app, host=ip, port=args.port)
