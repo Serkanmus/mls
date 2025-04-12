@@ -16,7 +16,7 @@ lock = threading.Lock()
 def send_request(payload):
     start_time = time.time()
     try:
-        response = requests.post("http://<your-load-balancer>:8100/rag", json=payload)
+        response = requests.post("http://127.0.0.1:8100/rag", json=payload)
     except Exception as e:
         elapsed = time.time() - start_time
         print(f"Request exception: {e}, took {elapsed:.3f}s")
