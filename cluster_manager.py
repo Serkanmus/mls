@@ -2,7 +2,7 @@
 import uvicorn
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
-import requests
+import httpx
 import threading
 import time
 import subprocess
@@ -19,7 +19,7 @@ logging.basicConfig(
 
 app = FastAPI()
 
-# Global list of backend servers
+# Global list of backend servers.
 # Each backend is a dict: {"url": "http://127.0.0.1:port", "port": port, "process": process_object}
 backend_servers = []
 backend_lock = threading.Lock()
@@ -40,7 +40,7 @@ rr_index = 0
 rr_lock = threading.Lock()
 
 # -------------------
-# Model for incoming request from clients.
+# Request Model
 # -------------------
 class QueryRequest(BaseModel):
     query: str
@@ -55,17 +55,22 @@ def get_next_backend():
         rr_index = (rr_index + 1) % len(backend_servers)
         return backend["url"]
 
+# -------------------
+# Asynchronous Forwarding using httpx
+# -------------------
 @app.post("/rag")
 async def route_request(payload: QueryRequest, req: Request):
     global request_count
-    # Count the request for autoscaling.
+    # Increase the request counter for autoscaling.
     with request_count_lock:
         request_count += 1
+
     backend_url = get_next_backend()
     if backend_url is None:
         return {"error": "No backend available"}
     try:
-        response = requests.post(backend_url + "/rag", json=payload.dict(), timeout=10)
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(backend_url + "/rag", json=payload.dict())
         return response.json()
     except Exception as e:
         return {"error": str(e)}
@@ -73,7 +78,6 @@ async def route_request(payload: QueryRequest, req: Request):
 def add_backend():
     """Start a new backend server (runs backend_server.py) on a new port."""
     with backend_lock:
-        # Determine the next available port.
         next_port = max([b["port"] for b in backend_servers]) + 1 if backend_servers else 8147
         cmd = ["python", "backend_server.py", "--port", str(next_port)]
         process = subprocess.Popen(cmd)
@@ -101,10 +105,8 @@ def autoscaler():
             rps = request_count / SCALER_INTERVAL
             request_count = 0
         logging.info(f"[Autoscaler] Average requests/sec: {rps:.2f}")
-
         with backend_lock:
             current_backends = len(backend_servers)
-        
         if rps > SCALE_UP_THRESHOLD and current_backends < MAX_BACKENDS:
             logging.info("[Autoscaler] Scaling up!")
             add_backend()
@@ -118,13 +120,10 @@ def initial_setup():
         add_backend()
 
 if __name__ == "__main__":
-    # Start with the minimum number of backends.
     initial_setup()
-    
     # Launch the autoscaler thread.
     scaler_thread = threading.Thread(target=autoscaler, daemon=True)
     scaler_thread.start()
-    
-    # Run the load balancer on port 8000.
-    logging.info("[Cluster Manager] Starting load balancer on port 8000")
+    # Run the load balancer on your chosen port (here we use 8100).
+    logging.info("[Cluster Manager] Starting load balancer on port 8100")
     uvicorn.run(app, host="0.0.0.0", port=8100)

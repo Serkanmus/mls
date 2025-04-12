@@ -40,7 +40,7 @@ start_http_server(9100)
 # -------------------
 NUM_WORKERS = 1
 MAX_BATCH_SIZE = 32
-MAX_WAITING_TIME = 0.2
+MAX_WAITING_TIME = 1.0
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # -------------------

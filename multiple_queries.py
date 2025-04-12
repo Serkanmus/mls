@@ -14,11 +14,18 @@ error_count = 0
 lock = threading.Lock()
 
 def send_request(payload):
+    global error_count
     start_time = time.time()
     try:
-        response = requests.post("http://127.0.0.1:8100/rag", json=payload)
+        # Modify the URL as needed; here we use port 8147 as an example.
+        # response = requests.post("http://localhost:8147/rag", json=payload)
+        response = requests.post("http://localhost:8100/rag", json=payload)
+
     except Exception as e:
         elapsed = time.time() - start_time
+        with lock:
+            response_times.append(elapsed)
+            error_count += 1
         print(f"Request exception: {e}, took {elapsed:.3f}s")
         return
 
@@ -26,16 +33,21 @@ def send_request(payload):
     try:
         res_json = response.json()
     except Exception as e:
+        with lock:
+            response_times.append(elapsed)
         print(f"Failed to parse JSON response: {response.text}")
         return
 
+    # Print the response, then record the elapsed time.
     if "result" in res_json:
         print(f"Finished request in {elapsed:.3f}s. Result: {res_json['result'][:50]}...")
     elif "error" in res_json:
         print(f"Finished request in {elapsed:.3f}s. Error: {res_json['error']}")
     else:
         print(f"Finished request in {elapsed:.3f}s. Unexpected response: {res_json}")
-
+    
+    with lock:
+        response_times.append(elapsed)
 
 threads = []
 for i in range(NUM_PARALLEL_REQUESTS):
