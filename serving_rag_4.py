@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 from fastapi import FastAPI
 import uvicorn
 from pydantic import BaseModel
@@ -16,7 +16,7 @@ import logging
 #########################################
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
@@ -36,8 +36,9 @@ start_http_server(9100)
 #########################################
 # HYPERPARAMETERS FOR BATCHER
 #########################################
-MAX_BATCH_SIZE = 8
-MAX_WAITING_TIME = 0.5
+NUM_WORKERS = 2        # Increase this to allow multiple concurrent batch workers.
+MAX_BATCH_SIZE = 40
+MAX_WAITING_TIME = 1.0
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 #########################################
@@ -125,7 +126,7 @@ def batch_worker():
         first_item = request_queue.get()
         batch_items.append(first_item)
 
-        # Attempt to collect more items for the batch until timeout or limit reached
+        # Attempt to collect more items until timeout or batch limit is reached.
         while len(batch_items) < MAX_BATCH_SIZE:
             elapsed = time.time() - start_time
             if elapsed > MAX_WAITING_TIME:
@@ -140,7 +141,7 @@ def batch_worker():
         logging.info(f"[BATCH WORKER] Formed batch of size {len(batch_items)} (Queue size: {request_queue.qsize()})")
 
         queries = [item[0].query for item in batch_items]
-        # Use the k from the first request in the batch; ideally, requests should be uniform in parameters
+        # Use the 'k' value from the first request in the batch.
         ks = [item[0].k for item in batch_items]
         k_for_batch = ks[0]
 
@@ -154,7 +155,7 @@ def batch_worker():
                 future_obj.set_exception(e)
             continue
 
-        # Deliver results to the waiting futures
+        # Deliver results to waiting futures.
         for item, output in zip(batch_items, results):
             future_obj = item[1]
             future_obj.set_result(output)
@@ -163,8 +164,9 @@ class QueryRequest(BaseModel):
     query: str
     k: int = 2
 
-# Start batch worker thread (daemon so it won't block shutdown)
-threading.Thread(target=batch_worker, daemon=True).start()
+# Start multiple batch worker threads.
+for i in range(NUM_WORKERS):
+    threading.Thread(target=batch_worker, name=f"Worker-{i+1}", daemon=True).start()
 
 def init_doc_embeddings():
     global doc_embeddings
@@ -182,7 +184,7 @@ def predict(payload: QueryRequest):
     fut = Future()
     request_queue.put((payload, fut))
     try:
-        result = fut.result()  # Wait for the batched processing to complete
+        result = fut.result()  # Wait for the batch processing to complete.
     except Exception as e:
         logging.error(f"Error processing query '{payload.query}': {e}")
         return {"error": str(e)}

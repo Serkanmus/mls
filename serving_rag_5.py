@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 from fastapi import FastAPI
 import uvicorn
 from pydantic import BaseModel
@@ -11,18 +11,14 @@ from concurrent.futures import Future
 from prometheus_client import Counter, Histogram, start_http_server
 import logging
 
-#########################################
-# LOGGING SETUP
-#########################################
+# Logging Setup
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-#########################################
-# METRICS SETUP
-#########################################
+# Metrics Setup
 request_count = Counter('rag_requests_total', 'Total RAG requests received')
 batch_duration = Histogram('rag_batch_processing_seconds', 'Time spent processing each batch')
 batch_size_histogram = Histogram('rag_batch_size', 'Sizes of processed batches')
@@ -30,19 +26,16 @@ request_latency = Histogram('rag_request_total_latency_seconds', 'Overall reques
 embedding_duration = Histogram('rag_embedding_processing_seconds', 'Time spent during query embedding')
 generation_duration = Histogram('rag_generation_processing_seconds', 'Time spent during text generation')
 
-# Start metrics server (separate from FastAPI)
+# Start metrics server
 start_http_server(9100)
 
-#########################################
-# HYPERPARAMETERS FOR BATCHER
-#########################################
-MAX_BATCH_SIZE = 8
-MAX_WAITING_TIME = 0.5
+# Batcher Hyperparameters
+NUM_WORKERS = 1
+MAX_BATCH_SIZE = 64  # Set maximum batch size to 128
+MAX_WAITING_TIME = 0.2  # Adjust waiting time as desired
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-#########################################
-# Setup: Documents, Models, Tokenizers
-#########################################
+# Sample documents and model/tokenizer setup
 documents = [
     "Cats are small furry carnivores that are often kept as pets.",
     "Dogs are domesticated mammals, not natural wild animals.",
@@ -111,9 +104,7 @@ def rag_pipeline_batch(queries: list[str], k: int = 2) -> list[str]:
     generated_texts = batch_generation(prompts, max_new_tokens=50)
     return generated_texts
 
-#########################################
-# FASTAPI + BATCHING IMPLEMENTATION
-#########################################
+# FastAPI and Batching Implementation
 app = FastAPI()
 request_queue = queue.Queue()
 
@@ -121,11 +112,11 @@ def batch_worker():
     while True:
         batch_items = []
         start_time = time.time()
-        # Block until at least one item is available
+        # Block until at least one item is available.
         first_item = request_queue.get()
         batch_items.append(first_item)
 
-        # Attempt to collect more items for the batch until timeout or limit reached
+        # Collect additional requests until reaching MAX_BATCH_SIZE or timeout.
         while len(batch_items) < MAX_BATCH_SIZE:
             elapsed = time.time() - start_time
             if elapsed > MAX_WAITING_TIME:
@@ -136,11 +127,13 @@ def batch_worker():
             except queue.Empty:
                 break
 
-        batch_size_histogram.observe(len(batch_items))
-        logging.info(f"[BATCH WORKER] Formed batch of size {len(batch_items)} (Queue size: {request_queue.qsize()})")
+        batch_size = len(batch_items)
+        batch_size_histogram.observe(batch_size)
+        logging.info(f"[BATCH WORKER] Formed batch of size {batch_size} (Queue size: {request_queue.qsize()})")
+        # Log inter-request waiting time to debug arrival rate.
+        logging.info(f"[BATCH WORKER] Time elapsed while batching: {time.time() - start_time:.3f}s")
 
         queries = [item[0].query for item in batch_items]
-        # Use the k from the first request in the batch; ideally, requests should be uniform in parameters
         ks = [item[0].k for item in batch_items]
         k_for_batch = ks[0]
 
@@ -154,7 +147,6 @@ def batch_worker():
                 future_obj.set_exception(e)
             continue
 
-        # Deliver results to the waiting futures
         for item, output in zip(batch_items, results):
             future_obj = item[1]
             future_obj.set_result(output)
@@ -163,8 +155,9 @@ class QueryRequest(BaseModel):
     query: str
     k: int = 2
 
-# Start batch worker thread (daemon so it won't block shutdown)
-threading.Thread(target=batch_worker, daemon=True).start()
+# Start multiple batch workers.
+for i in range(NUM_WORKERS):
+    threading.Thread(target=batch_worker, name=f"Worker-{i+1}", daemon=True).start()
 
 def init_doc_embeddings():
     global doc_embeddings
@@ -182,7 +175,7 @@ def predict(payload: QueryRequest):
     fut = Future()
     request_queue.put((payload, fut))
     try:
-        result = fut.result()  # Wait for the batched processing to complete
+        result = fut.result()  # Wait for batch processing to complete.
     except Exception as e:
         logging.error(f"Error processing query '{payload.query}': {e}")
         return {"error": str(e)}
