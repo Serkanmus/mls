@@ -3,9 +3,10 @@ import threading
 import time
 import statistics
 import numpy as np
+import socket
 
 # Parameters
-REQUESTS_PER_SECOND = 5       # Send 50 requests each second
+REQUESTS_PER_SECOND = 50       # Send 50 requests each second
 DURATION_SECONDS = 20          # Total duration (in seconds) to send requests
 TOTAL_REQUESTS = REQUESTS_PER_SECOND * DURATION_SECONDS  # 50 * 20 = 1000 requests
 
@@ -18,6 +19,22 @@ error_count = 0
 lock = threading.Lock()  # To protect updates to shared variables
 threads = []  # List to store thread references
 
+def get_my_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+# Use the dynamically determined IP in your URL:
+SERVER_IP = get_my_ip()
+SERVER_URL = f"http://{SERVER_IP}:8100/rag"
+# SERVER_URL = f"http://{SERVER_IP}:8147/rag"
+
 def send_request(payload):
     global error_count
     start_time = time.time()
@@ -25,7 +42,7 @@ def send_request(payload):
         # response = requests.post("http://localhost:8100/rag", json=payload)
         # response = requests.post("http://localhost:8100/rag", json=payload)
         # response = requests.post("http://localhost:8147/rag", json=payload)
-        response = requests.post("http://129.215.18.53:8100/rag", json=payload)
+        response = requests.post(SERVER_URL, json=payload)
 
     except Exception as e:
         elapsed = time.time() - start_time
