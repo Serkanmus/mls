@@ -1,4 +1,3 @@
-# src/utils.py
 import os
 import torch
 import logging
@@ -21,24 +20,20 @@ def get_ip(dev_mode):
     return "0.0.0.0"
 
 def update_env_variable(key: str, value: str, env_path: str = ".env"):
-    # 기존 .env 파일이 존재하면 읽어서 딕셔너리로 변환
     env_vars = {}
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         for line in lines:
             line = line.strip()
-            # 빈 줄이나 주석 무시
             if not line or line.startswith("#"):
                 continue
             if "=" in line:
                 k, v = line.split("=", 1)
                 env_vars[k.strip()] = v.strip().strip('"')
     
-    # key 값 업데이트 또는 추가
     env_vars[key] = value
 
-    # 업데이트된 딕셔너리를 .env 파일로 기록 (덮어쓰기)
     with open(env_path, "w", encoding="utf-8") as f:
         for k, v in env_vars.items():
             f.write(f'{k}="{v}"\n')
@@ -46,13 +41,16 @@ def update_env_variable(key: str, value: str, env_path: str = ".env"):
 # ----------------------------
 # Device configuration
 # ----------------------------
-device = (
-    torch.device("cuda") if torch.cuda.is_available()
-    else torch.device("mps") if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
-    else torch.device("cpu")
-)
+def get_device():
+    # Evaluate the available device at the time of the call.
+    if torch.cuda.is_available():
+         return torch.device("cuda")
+    elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+         return torch.device("mps")
+    else:
+         return torch.device("cpu")
 
-print(f"Using device: {device.type}")
+print(f"Using device: {get_device().type}")
 
 # ----------------------------
 # Logging configuration
