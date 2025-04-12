@@ -28,8 +28,8 @@ def get_my_ip():
 
 # Use the dynamically determined IP in your URL:
 SERVER_IP = get_my_ip()
-# SERVER_URL = f"http://{SERVER_IP}:8100/rag"
-SERVER_URL = f"http://{SERVER_IP}:8147/rag"
+SERVER_URL = f"http://{SERVER_IP}:8100/rag"
+# SERVER_URL = f"http://{SERVER_IP}:8147/rag"
 
 
 
