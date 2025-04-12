@@ -31,7 +31,7 @@ def send_request(payload):
     start_time = time.time()
     try:
         # response = requests.post("http://localhost:8100/rag", json=payload)
-        response = requests.post("http://192.168.47.132:8100/rag", json=payload)
+        response = requests.post("http://129.215.18.53:8100/rag", json=payload)
 
     except Exception as e:
         elapsed = time.time() - start_time

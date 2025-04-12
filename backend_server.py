@@ -204,4 +204,4 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8147, help="Port number to run the server on")
     args = parser.parse_args()
     logging.info(f"[SERVER] Starting RAG server on port {args.port}")
-    uvicorn.run(app, host="192.168.47.132", port=args.port)
+    uvicorn.run(app, host="129.215.18.53", port=args.port)
