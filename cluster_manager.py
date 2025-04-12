@@ -35,23 +35,41 @@ def get_my_ip():
         s.close()
     return ip
 
+# -------------------
+# Global Async HTTP Client
+# -------------------
+# Create a single httpx.AsyncClient to be reused across requests.
+# We set limits to control the maximum open connections.
+async_client = httpx.AsyncClient(
+    timeout=10,
+    limits=httpx.Limits(max_connections=50, max_keepalive_connections=20)
+)
+
+# -------------------
 # Global list of backend servers.
 # Each backend is a dict: {"url": "http://<ip>:port", "port": port, "process": process_object}
+# -------------------
 backend_servers = []
 backend_lock = threading.Lock()
 
+# -------------------
 # Autoscaler metrics: track number of requests forwarded during each interval.
+# -------------------
 request_count = 0
 request_count_lock = threading.Lock()
 
+# -------------------
 # Autoscaler parameters
+# -------------------
 MIN_BACKENDS = 1
 MAX_BACKENDS = 10
 SCALE_UP_THRESHOLD = 30   # if more than 30 requests per interval, scale up
 SCALE_DOWN_THRESHOLD = 10 # if fewer than 10 requests per interval, scale down
 SCALER_INTERVAL = 10      # check every 10 seconds
 
+# -------------------
 # For round-robin load balancing.
+# -------------------
 rr_index = 0
 rr_lock = threading.Lock()
 
@@ -72,7 +90,7 @@ def get_next_backend():
         return backend["url"]
 
 # -------------------
-# Asynchronous Forwarding using httpx
+# Asynchronous Forwarding using the global async client
 # -------------------
 @app.post("/rag")
 async def route_request(payload: QueryRequest, req: Request):
@@ -84,8 +102,7 @@ async def route_request(payload: QueryRequest, req: Request):
     if backend_url is None:
         return {"error": "No backend available"}
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(backend_url + "/rag", json=payload.dict())
+        response = await async_client.post(backend_url + "/rag", json=payload.dict())
         return response.json()
     except Exception as e:
         return {"error": str(e)}
@@ -137,10 +154,8 @@ def initial_setup():
 
 if __name__ == "__main__":
     initial_setup()
-    # Launch the autoscaler thread.
     scaler_thread = threading.Thread(target=autoscaler, daemon=True)
     scaler_thread.start()
-    # Run the load balancer on port 8100, using the dynamically determined IP.
     ip = get_my_ip()
     logging.info(f"[Cluster Manager] Starting load balancer on {ip}:8100")
     uvicorn.run(app, host=ip, port=8100)
