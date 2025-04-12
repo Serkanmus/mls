@@ -10,6 +10,8 @@ import time
 from concurrent.futures import Future
 from prometheus_client import Counter, Histogram, start_http_server
 import logging
+import socket
+
 
 # Logging Setup
 logging.basicConfig(
@@ -17,6 +19,21 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+def get_my_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+# Use the dynamically determined IP in your URL:
+SERVER_IP = get_my_ip()
+SERVER_URL = f"http://{SERVER_IP}:8100/rag"
 
 # Metrics Setup
 request_count = Counter('rag_requests_total', 'Total RAG requests received')
@@ -187,4 +204,4 @@ def predict(payload: QueryRequest):
 
 if __name__ == "__main__":
     logging.info("[SERVER] Starting RAG server on port 8147")
-    uvicorn.run(app, host="0.0.0.0", port=8147)
+    uvicorn.run(app, host=SERVER_IP, port=8147)

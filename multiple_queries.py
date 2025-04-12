@@ -6,7 +6,7 @@ import numpy as np
 import socket
 
 # Adjust these values to your liking:
-NUM_PARALLEL_REQUESTS = 50
+NUM_PARALLEL_REQUESTS = 1000
 REQUEST_PAYLOAD = {"query": "Which animals can hover in the air?", "k": 2}
 
 # Shared lists/variables for recording metrics.
