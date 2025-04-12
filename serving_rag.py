@@ -1,99 +1,112 @@
-import torch
-import numpy as np
-from transformers import AutoTokenizer, AutoModel, pipeline
-from fastapi import FastAPI
-import uvicorn
-from pydantic import BaseModel
+#!/usr/bin/env python
+import os
 import time
+import argparse
+import multiprocessing
+import threading
+import uvicorn
+import itertools
+import asyncio
+from fastapi import Request
+from utils import get_ip, update_env_variable
 
-print(torch.cuda.is_available())
-print(torch.version.cuda)
-devicee = "cuda"
-app = FastAPI()
+# Use the existing autoscaler and load_balancer modules as is.
+from autoscaler import AutoScaler
+from load_balancer import lb as load_balancer_instance, app as lb_app
 
-# Example documents in memory
-documents = [
-    "Cats are small furry carnivores that are often kept as pets.",
-    "Dogs are domesticated mammals, not natural wild animals.",
-    "Hummingbirds can hover in mid-air by rapidly flapping their wings."
-]
+# Import the FastAPI application object from a separate module.
+from app_module import app
 
-# 1. Load embedding model
-EMBED_MODEL_NAME = "intfloat/multilingual-e5-large-instruct"
-embed_tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL_NAME, use_fast=False)
-embed_model = AutoModel.from_pretrained(EMBED_MODEL_NAME)
-embed_model.to(devicee)
+def run_worker(host: str, port: int, gpu_id: str, dev: bool):
+    # Set the GPU environment variable for this worker process.
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
+    print(f"Worker starting on {host}:{port} using GPU {gpu_id}")
+    uvicorn.run(app, host=host, port=port, reload=dev)
 
-# Basic Chat LLM
-chat_pipeline = pipeline("text-generation", model="facebook/opt-125m", device=devicee)
-# Note: try this 1.5B model if you got enough GPU memory
-#chat_pipeline = pipeline("text-generation", model="Qwen/Qwen2.5-1.5B-Instruct", device=devicee)
+def main():
+    parser = argparse.ArgumentParser(
+        description="Serving_rag launcher: supports worker, autoscale, loadbalancer, and combined modes with GPU assignment"
+    )
+    parser.add_argument("--dev", action="store_true", help="Development mode (enable reload)")
+    parser.add_argument("--mode", type=str, choices=["worker", "autoscale", "loadbalancer", "combined"],
+                        default="worker", help="Select execution mode")
+    parser.add_argument("--host", type=str, default=None, help="IP address to bind the server (auto-detected if not provided)")
+    parser.add_argument("--base_port", type=int, default=8777, help="Starting port number for worker servers")
+    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes (used in autoscale/combined modes)")
+    parser.add_argument("--lb_port", type=int, default=8888, help="Load Balancer port number")
+    parser.add_argument("--gpu_ids", type=str, default="0,1,2,3", 
+                        help="Comma-separated list of GPU IDs to assign to worker processes")
+    args = parser.parse_args()
 
+    # Parse the provided GPU IDs.
+    gpu_ids = [gpu.strip() for gpu in args.gpu_ids.split(",") if gpu.strip()]
+    num_gpus = len(gpu_ids)
+    if num_gpus == 0:
+        raise ValueError("No GPU IDs provided via --gpu_ids")
 
+    if args.host is None:
+        args.host = get_ip(args.dev)
+    update_env_variable("HOST_IP", args.host)
+    print(f"Server Host: {args.host}")
 
-## Hints:
-
-### Step 3.1:
-# 1. Initialize a request queue
-# 2. Initialize a background thread to process the request (via calling the rag_pipeline function)
-# 3. Modify the predict function to put the request in the queue, instead of processing it immediately
-
-### Step 3.2:
-# 1. Take up to MAX_BATCH_SIZE requests from the queue or wait until MAX_WAITING_TIME
-# 2. Process the batched requests
-
-def get_embedding(text: str) -> np.ndarray:
-    """Compute a simple average-pool embedding."""
-    inputs = embed_tokenizer(text, return_tensors="pt", truncation=True)
-    inputs = {k: v.to(devicee) for k, v in inputs.items()}
-    with torch.no_grad():
-        outputs = embed_model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1).cpu().numpy()
-
-# Precompute document embeddings
-doc_embeddings = np.vstack([get_embedding(doc) for doc in documents])
-
-### You may want to use your own top-k retrieval method (task 1)
-def retrieve_top_k(query_emb: np.ndarray, k: int = 2) -> list:
-    """Retrieve top-k docs via dot-product similarity."""
-    sims = doc_embeddings @ query_emb.T
-    top_k_indices = np.argsort(sims.ravel())[::-1][:k]
-    return [documents[i] for i in top_k_indices]
-
-
-def rag_pipeline(query: str, k: int = 2) -> str:
-    t0 = time.time()
-    query_emb = get_embedding(query)
-    t1 = time.time()
-
-    retrieved_docs = retrieve_top_k(query_emb, k)
-    t2 = time.time()
-
-    context = "\n".join(retrieved_docs)
-    prompt = f"Question: {query}\nContext:\n{context}\nAnswer:"
-    
-    generated = chat_pipeline(prompt, max_length=50, do_sample=True)[0]["generated_text"]
-    t3 = time.time()
-
-    # Print out durations
-    print(f"Embedding took {t1 - t0:.3f}s, Retrieval took {t2 - t1:.3f}s, Generation took {t3 - t2:.3f}s")
-
-    return generated
-
-
-# Define request model
-class QueryRequest(BaseModel):
-    query: str
-    k: int = 2
-
-@app.post("/rag")
-def predict(payload: QueryRequest):
-    result = rag_pipeline(payload.query, payload.k)
-    
-    return {
-        "query": payload.query,
-        "result": result,
-    }
+    if args.mode == "worker":
+        # In worker mode, run a single worker using the first GPU in the list.
+        gpu_id = gpu_ids[0]
+        print(f"[Worker mode] Running a single worker on {args.host}:{args.base_port} with GPU {gpu_id}")
+        run_worker(args.host, args.base_port, gpu_id, args.dev)
+    elif args.mode == "autoscale":
+        print(f"[Autoscale mode] Starting {args.workers} worker(s) from {args.host}:{args.base_port} with round-robin GPU assignment")
+        processes = []
+        for i in range(args.workers):
+            port = args.base_port + i
+            gpu_id = gpu_ids[i % num_gpus]  # Round-robin assignment of GPU IDs.
+            p = multiprocessing.Process(target=run_worker, args=(args.host, port, gpu_id, args.dev))
+            p.start()
+            processes.append(p)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("KeyboardInterrupt: shutting down autoscale mode...")
+            for p in processes:
+                p.terminate()
+    elif args.mode == "loadbalancer":
+        print(f"[Load Balancer mode] Running load balancer on {args.host}:{args.lb_port}")
+        # In loadbalancer mode, it is assumed that worker processes are launched separately with proper GPU assignments.
+        worker_urls = [f"http://{args.host}:{args.base_port + i}" for i in range(args.workers)]
+        load_balancer_instance.worker_urls = worker_urls
+        load_balancer_instance.worker_iter = itertools.cycle(worker_urls)
+        uvicorn.run(lb_app, host=args.host, port=args.lb_port, reload=args.dev)
+    elif args.mode == "combined":
+        print("[Combined mode] Running Autoscaler and Load Balancer concurrently with GPU assignment")
+        processes = []
+        for i in range(args.workers):
+            port = args.base_port + i
+            gpu_id = gpu_ids[i % num_gpus]  # Round-robin assignment.
+            p = multiprocessing.Process(target=run_worker, args=(args.host, port, gpu_id, args.dev))
+            p.start()
+            processes.append(p)
+        worker_urls = [f"http://{args.host}:{args.base_port + i}" for i in range(args.workers)]
+        load_balancer_instance.worker_urls = worker_urls
+        load_balancer_instance.worker_iter = itertools.cycle(worker_urls)
+        lb_thread = threading.Thread(
+            target=lambda: uvicorn.run(lb_app, host=args.host, port=args.lb_port, reload=args.dev),
+            daemon=True
+        )
+        lb_thread.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("KeyboardInterrupt: shutting down combined mode...")
+            for p in processes:
+                p.terminate()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8147)
+    import multiprocessing
+    try:
+        multiprocessing.set_start_method("spawn")
+    except RuntimeError:
+        # Ignore if already set.
+        pass
+    main()
