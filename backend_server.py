@@ -13,6 +13,7 @@ from prometheus_client import Counter, Histogram, start_http_server
 import logging
 import argparse
 import socket
+import asyncio
 
 # -------------------
 # Logging Setup
@@ -142,7 +143,6 @@ def batch_worker():
         # Block until at least one request is available.
         first_item = request_queue.get()
         batch_items.append(first_item)
-
         # Try to form a larger batch until MAX_BATCH_SIZE or timeout.
         while len(batch_items) < MAX_BATCH_SIZE:
             elapsed = time.time() - start_time
@@ -153,16 +153,13 @@ def batch_worker():
                 batch_items.append(item)
             except queue.Empty:
                 break
-
         batch_size = len(batch_items)
         batch_size_histogram.observe(batch_size)
         logging.info(f"[BATCH WORKER] Formed batch of size {batch_size} (Queue size: {request_queue.qsize()})")
         logging.info(f"[BATCH WORKER] Time elapsed while batching: {time.time() - start_time:.3f}s")
-
         queries = [item[0].query for item in batch_items]
         ks = [item[0].k for item in batch_items]
         k_for_batch = ks[0]
-
         try:
             with batch_duration.time():
                 results = rag_pipeline_batch(queries, k=k_for_batch)
@@ -172,7 +169,6 @@ def batch_worker():
                 future_obj = item[1]
                 future_obj.set_exception(e)
             continue
-
         for item, output in zip(batch_items, results):
             future_obj = item[1]
             future_obj.set_result(output)
@@ -192,20 +188,20 @@ def init_doc_embeddings():
 
 init_doc_embeddings()
 
+# Here's the key change: we mark the endpoint as async and use asyncio.to_thread to run blocking code.
 @app.post("/rag")
-def predict(payload: QueryRequest):
+async def predict(payload: QueryRequest):
     logging.info(f"[REQUEST] Received query: '{payload.query}'")
     start_time = time.time()
     request_count.inc()
-
     fut = Future()
     request_queue.put((payload, fut))
     try:
-        result = fut.result()
+        # Offload the blocking Future result waiting to a thread
+        result = await asyncio.to_thread(fut.result)
     except Exception as e:
         logging.error(f"Error processing query '{payload.query}': {e}")
         return {"error": str(e)}
-
     total_latency = time.time() - start_time
     request_latency.observe(total_latency)
     logging.info(f"[RESPONSE] Completed query: '{payload.query}' with total latency: {total_latency:.3f}s")
