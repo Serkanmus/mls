@@ -126,4 +126,4 @@ if __name__ == "__main__":
     scaler_thread.start()
     # Run the load balancer on your chosen port (here we use 8100).
     logging.info("[Cluster Manager] Starting load balancer on port 8100")
-    uvicorn.run(app, host="0.0.0.0", port=8100)
+    uvicorn.run(app, host="192.168.47.132", port=8100)
