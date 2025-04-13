@@ -14,7 +14,7 @@ load_dotenv()
 # ----------------------------
 # Experiment configuration
 # ----------------------------
-NUM_REQUESTS = 100
+NUM_REQUESTS = 1000
 INTERVAL = 0
 MAX_WORKERS = None
 BATCH_SIZES = [2, 4, 8, 16, 32, 64]
@@ -143,12 +143,12 @@ def run_experiments():
             key = f"rag_batch_{batch_size}_{pattern}"
             summary[key] = simulate_requests(payload, send_pattern=pattern)
 
-        print("\n===================================")
-        print(f"Running experiment: mode='single', pattern={pattern}")
-        payload = BASE_PAYLOAD.copy()
-        payload["mode"] = "single"
-        key = f"rag_single_{pattern}"
-        summary[key] = simulate_requests(payload, send_pattern=pattern)
+        # print("\n===================================")
+        # print(f"Running experiment: mode='single', pattern={pattern}")
+        # payload = BASE_PAYLOAD.copy()
+        # payload["mode"] = "single"
+        # key = f"rag_single_{pattern}"
+        # summary[key] = simulate_requests(payload, send_pattern=pattern)
 
     print("\n=== Final Summary ===")
     for config, stats in summary.items():
