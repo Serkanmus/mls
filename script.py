@@ -14,11 +14,11 @@ load_dotenv()
 # ----------------------------
 # Experiment configuration
 # ----------------------------
-NUM_REQUESTS = 10
+NUM_REQUESTS = 1000
 INTERVAL = 0
 MAX_WORKERS = None
 BATCH_SIZES = [2, 4, 8, 16, 32, 64]
-SEND_PATTERNS = ["immediate"]#, "spread", "random"]
+SEND_PATTERNS = ["immediate", "spread", "random"]
 DURATION = 20  # seconds to spread over for spread/random
 HOST_IP = os.environ.get("HOST_IP")
 
@@ -140,11 +140,11 @@ def simulate_requests(payload, num_requests=NUM_REQUESTS, interval=INTERVAL, max
         "avg_retrieval_time": mean(retrieval_times) if retrieval_times else None,
         "avg_generation_time": mean(gen_times) if gen_times else None,
         "avg_pipeline_time": mean(pipeline_times) if pipeline_times else None,
-        "cpu_usages": mean(cpu_usages) if cpu_usages else None,
-        "mem_usages": mean(mem_usages) if mem_usages else None,
-        "gpu_usages": mean(gpu_usages) if gpu_usages else None,
-        "net_sent": mean(net_sent) if net_sent else None,
-        "net_recv": mean(net_recv) if net_recv else None, 
+        "cpu_usages": f"{mean(cpu_usages):.2f}%" if cpu_usages else None,
+        "mem_usages": f"{mean(mem_usages):.2f}%" if mem_usages else None,
+        "gpu_usages": f"{mean(gpu_usages):.2f}%" if gpu_usages else None,
+        "net_sent": f"{mean(net_sent):.2f} kB/s" if net_sent else None,
+        "net_recv": f"{mean(net_recv):.2f} kB/s" if net_recv else None, 
         "batch_size": payload.get("batch_size"),
         "mode": payload.get("mode"),
         "send_pattern": send_pattern
