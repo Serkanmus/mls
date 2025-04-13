@@ -6,7 +6,7 @@ from threading import Lock
 
 app = FastAPI()
 
-# Global request counter for autoscaling metrics (total count across all requests)
+# Global request counter for autoscaling metrics.
 request_count = 0
 request_count_lock = Lock()
 
@@ -24,30 +24,45 @@ def get_and_reset_request_count():
 
 class LoadBalancer:
     def __init__(self, worker_urls):
-        """
-        :param worker_urls: List of base URLs for worker servers (e.g., ["http://127.0.0.1:8777", ...])
-        """
         self.worker_urls = worker_urls
         self.worker_iter = itertools.cycle(worker_urls)
         self.client = httpx.AsyncClient()
-        # Initialize a dictionary to keep track of per-worker request counts.
+        # Dictionary to count per-worker requests.
         self.worker_request_counts = {url: 0 for url in worker_urls}
-        self.lock = Lock()  # Protect dictionary updates.
+        self.lock = Lock()
+
+    async def _get_healthy_worker(self):
+        """
+        Try each worker URL once and return the first one that passes a health check.
+        If none are healthy, return None.
+        """
+        num_urls = len(self.worker_urls)
+        for _ in range(num_urls):
+            target_base = next(self.worker_iter)
+            health_url = f"{target_base}/health"
+            try:
+                resp = await self.client.get(health_url, timeout=2.0)
+                if resp.status_code == 200 and resp.json().get("status") == "ready":
+                    return target_base
+            except Exception:
+                continue
+        return None
 
     async def forward(self, request: Request):
         # Increment global request counter.
         increment_request_count()
-        # Select the next worker URL using round-robin.
-        target_base = next(self.worker_iter)
-        # Increment per-worker counter.
+        # Try to get a healthy worker; if none, return a 503 error.
+        target_base = await self._get_healthy_worker()
+        if not target_base:
+            return JSONResponse({"error": "No healthy worker available"}, status_code=503)
+        # Update the per-worker counter.
         with self.lock:
             if target_base not in self.worker_request_counts:
                 self.worker_request_counts[target_base] = 0
             self.worker_request_counts[target_base] += 1
-            # Optionally log the current count for this worker.
             print(f"[LoadBalancer] Forwarding to {target_base}; count={self.worker_request_counts[target_base]}")
 
-        # Construct the target URL.
+        # Construct the full target URL.
         target_url = f"{target_base}{request.url.path}"
         if request.url.query:
             target_url = f"{target_url}?{request.url.query}"
@@ -68,10 +83,9 @@ class LoadBalancer:
         with self.lock:
             self.worker_urls = new_urls
             self.worker_iter = itertools.cycle(new_urls)
-            # Reset and reinitialize the per-worker counters.
             self.worker_request_counts = {url: 0 for url in new_urls}
 
-# By default, these worker URLs will be updated in combined mode.
+# Default worker URLs (to be updated by the autoscaler).
 WORKER_URLS = [
     "http://127.0.0.1:8770",
     "http://127.0.0.1:8778",
@@ -88,9 +102,7 @@ async def proxy_all(request: Request):
         return response
     return JSONResponse(content=response.json(), status_code=response.status_code)
 
-# Optionally, add an endpoint to inspect per-worker metrics.
+# Optional: a metrics endpoint to query per-worker request counts.
 @app.get("/metrics")
 async def get_metrics():
-    return {
-        "worker_request_counts": lb.worker_request_counts
-    }
+    return {"worker_request_counts": lb.worker_request_counts}

@@ -18,7 +18,7 @@ NUM_REQUESTS = 100
 INTERVAL = 0
 MAX_WORKERS = None
 BATCH_SIZES = [2, 4, 8, 16, 32, 64]
-SEND_PATTERNS = ["immediate"]#, "spread", "random"]
+SEND_PATTERNS = ["spread", "random"]
 DURATION = 20  # seconds to spread over for spread/random
 HOST_IP = os.environ.get("HOST_IP")
 
