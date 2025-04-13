@@ -119,7 +119,7 @@ def rag_pipeline(query, k=2, mode="single"):
                     "generation_time": generation_time,
                     "total_time": total_time,
                     "batch_size": len(query),
-                    "hardware": get_hardware_metrics()
+                    #"hardware": get_hardware_metrics()
                 }
             } for g in generated
         ]
@@ -150,6 +150,6 @@ def rag_pipeline(query, k=2, mode="single"):
             "retrieval_time": retrieval_time,
             "generation_time": generation_time,
             "total_time": total_time,
-            "hardware": get_hardware_metrics()
+            #"hardware": get_hardware_metrics()
         }
     }
