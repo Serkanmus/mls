@@ -48,7 +48,7 @@ start_http_server(9100)
 
 # Batcher Hyperparameters
 NUM_WORKERS = 1
-MAX_BATCH_SIZE = 32  # Set maximum batch size to 128
+MAX_BATCH_SIZE = 2  # Set maximum batch size to 128
 MAX_WAITING_TIME = 0.2  # Adjust waiting time as desired
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 

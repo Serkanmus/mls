@@ -7,7 +7,7 @@ import socket
 
 # Parameters
 REQUESTS_PER_SECOND = 50       # Send 50 requests each second
-DURATION_SECONDS = 20          # Total duration (in seconds) to send requests
+DURATION_SECONDS = 10          # Total duration (in seconds) to send requests
 TOTAL_REQUESTS = REQUESTS_PER_SECOND * DURATION_SECONDS  # 50 * 20 = 1000 requests
 
 # Request payload (modify as needed)
@@ -33,7 +33,7 @@ def get_my_ip():
 # Use the dynamically determined IP in your URL:
 SERVER_IP = get_my_ip()
 SERVER_URL = f"http://{SERVER_IP}:8100/rag"
-# SERVER_URL = f"http://{SERVER_IP}:8147/rag"
+# SERVER_URL = f"http://10.124.53.125:8147/rag"
 
 def send_request(payload):
     global error_count
@@ -62,7 +62,7 @@ def send_request(payload):
 
     # Print the response, then record the elapsed time.
     if "result" in res_json:
-        print(f"Finished request in {elapsed:.3f}s. Result: {res_json['result'][:50]}...")
+        print(f"Finished request in {elapsed:.3f}s. Result: {res_json['result'][:100]}...")
     elif "error" in res_json:
         print(f"Finished request in {elapsed:.3f}s. Error: {res_json['error']}")
     else:
