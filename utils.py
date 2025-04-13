@@ -72,12 +72,12 @@ logger = logging.getLogger(__name__)
 MAX_BATCH_SIZE = 10        # Maximum number of requests per batch
 MAX_WAITING_TIME = 0.5     # Maximum wait time (in seconds) before processing a batch
 
-try:
-    import pynvml
-    pynvml.nvmlInit()
-    gpu_available = True
-except ImportError:
-    gpu_available = False
+# try:
+#     import pynvml
+#     pynvml.nvmlInit()
+#     gpu_available = True
+# except ImportError:
+#     gpu_available = False
     
 def get_hardware_metrics():
     # CPU
@@ -102,10 +102,10 @@ def get_hardware_metrics():
 
     # GPU
     gpu_usage = None
-    if gpu_available:
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-        gpu_usage = {"gpu": util.gpu, "memory": util.memory}
+    # if gpu_available:
+    #     handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+    #     util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+    #     gpu_usage = {"gpu": util.gpu, "memory": util.memory}
 
     return {
         "cpu_usage_percent": cpu_usage,
