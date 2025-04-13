@@ -22,8 +22,8 @@ SEND_PATTERNS = [ "spread", "random"]
 DURATION = 20  # seconds to spread over for spread/random
 HOST_IP = os.environ.get("HOST_IP")
 
-# URL = f"http://{HOST_IP}:8777/rag"
-URL = f"http://10.124.53.125:8777/rag"
+URL = f"http://{HOST_IP}:8777/rag"
+# URL = f"http://10.124.53.125:8777/rag"
 
 BASE_PAYLOAD = {
     "query": "What is the capital of France?",
