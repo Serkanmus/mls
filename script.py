@@ -14,15 +14,16 @@ load_dotenv()
 # ----------------------------
 # Experiment configuration
 # ----------------------------
-NUM_REQUESTS = 1000
+NUM_REQUESTS = 10
 INTERVAL = 0
 MAX_WORKERS = None
 BATCH_SIZES = [2, 4, 8, 16, 32, 64]
-SEND_PATTERNS = ["spread", "random"]
+SEND_PATTERNS = ["immediate"]#, "spread", "random"]
 DURATION = 20  # seconds to spread over for spread/random
 HOST_IP = os.environ.get("HOST_IP")
 
 URL = f"http://{HOST_IP}:8777/rag"
+# URL = f"http://10.124.53.125:8777/rag"
 
 BASE_PAYLOAD = {
     "query": "What is the capital of France?",
@@ -97,6 +98,12 @@ def simulate_requests(payload, num_requests=NUM_REQUESTS, interval=INTERVAL, max
     retrieval_times = [r["metrics"].get("retrieval_time") for r in valid if r["metrics"].get("retrieval_time") is not None]
     gen_times = [r["metrics"].get("generation_time") for r in valid if r["metrics"].get("generation_time") is not None]
     pipeline_times = [r["metrics"].get("total_time") for r in valid if r["metrics"].get("total_time") is not None]
+    cpu_usages = [r["metrics"]["hardware"]["cpu_usage_percent"] for r in valid if "hardware" in r["metrics"]]
+    mem_usages = [r["metrics"]["hardware"]["memory_usage_percent"] for r in valid if "hardware" in r["metrics"]]
+    gpu_usages = [r["metrics"]["hardware"]["gpu_usage"]["gpu"] for r in valid
+                  if "hardware" in r["metrics"] and r["metrics"]["hardware"]["gpu_usage"] is not None]
+    net_sent = [r["metrics"]["hardware"]["network_sent_kBps"] for r in valid if "hardware" in r["metrics"]]
+    net_recv = [r["metrics"]["hardware"]["network_recv_kBps"] for r in valid if "hardware" in r["metrics"]]
 
     print("\n--- Results ---")
     print(f"Success: {len(valid)}, Fail: {num_requests - len(valid)}")
@@ -111,6 +118,17 @@ def simulate_requests(payload, num_requests=NUM_REQUESTS, interval=INTERVAL, max
         print(f"Average Generation Time: {mean(gen_times):.3f} sec")
     if pipeline_times:
         print(f"Average Pipeline Time: {mean(pipeline_times):.3f} sec")
+    if cpu_usages:
+        print(f"Avg CPU Usage: {mean(cpu_usages):.2f}%")
+    if mem_usages:
+        print(f"Avg Memory Usage: {mean(mem_usages):.2f}%")
+    if gpu_usages:
+        print(f"Avg GPU Utilization: {mean(gpu_usages):.2f}%")
+    if net_sent:
+        print(f"Avg Network Sent: {mean(net_sent):.2f} kB/s")
+    if net_recv:
+        print(f"Avg Network Recv: {mean(net_recv):.2f} kB/s")
+
 
     return {
         "avg_total_latency": mean(latencies) if latencies else None,
@@ -122,6 +140,11 @@ def simulate_requests(payload, num_requests=NUM_REQUESTS, interval=INTERVAL, max
         "avg_retrieval_time": mean(retrieval_times) if retrieval_times else None,
         "avg_generation_time": mean(gen_times) if gen_times else None,
         "avg_pipeline_time": mean(pipeline_times) if pipeline_times else None,
+        "cpu_usages": mean(cpu_usages) if cpu_usages else None,
+        "mem_usages": mean(mem_usages) if mem_usages else None,
+        "gpu_usages": mean(gpu_usages) if gpu_usages else None,
+        "net_sent": mean(net_sent) if net_sent else None,
+        "net_recv": mean(net_recv) if net_recv else None, 
         "batch_size": payload.get("batch_size"),
         "mode": payload.get("mode"),
         "send_pattern": send_pattern
@@ -143,12 +166,12 @@ def run_experiments():
             key = f"rag_batch_{batch_size}_{pattern}"
             summary[key] = simulate_requests(payload, send_pattern=pattern)
 
-        # print("\n===================================")
-        # print(f"Running experiment: mode='single', pattern={pattern}")
-        # payload = BASE_PAYLOAD.copy()
-        # payload["mode"] = "single"
-        # key = f"rag_single_{pattern}"
-        # summary[key] = simulate_requests(payload, send_pattern=pattern)
+        print("\n===================================")
+        print(f"Running experiment: mode='single', pattern={pattern}")
+        payload = BASE_PAYLOAD.copy()
+        payload["mode"] = "single"
+        key = f"rag_single_{pattern}"
+        summary[key] = simulate_requests(payload, send_pattern=pattern)
 
     print("\n=== Final Summary ===")
     for config, stats in summary.items():
