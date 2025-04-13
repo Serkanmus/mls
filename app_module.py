@@ -1,4 +1,3 @@
-# app_module.py
 from fastapi import FastAPI
 from request_queue import RequestQueue  # 기존 모듈 임포트
 from batcher import Batcher
@@ -8,18 +7,34 @@ import asyncio
 import time
 from concurrent.futures import Future
 
-# FastAPI 앱 객체 생성
 app = FastAPI()
 
-# 요청 스키마 정의
+# Global readiness flag; workers report readiness only after initialization.
+is_ready = False
+
+@app.on_event("startup")
+async def startup_event():
+    global is_ready
+    # Perform all necessary initialization such as model loading and computing embeddings.
+    init_doc_embeddings()
+    is_ready = True
+    print("Worker ready: Initialization complete.")
+
+# Health endpoint for readiness check.
+@app.get("/health")
+async def health_check():
+    if is_ready:
+        return {"status": "ready"}
+    return {"status": "initializing"}, 503
+
+# Request schema definition.
 class QueryRequest(BaseModel):
     query: str
     k: int = 2
-    mode: str = "batch"  # "single" 또는 "batch"
+    mode: str = "batch"  # "single" or "batch"
     batch_size: int | None = None
 
-# 서버 초기화: 문서 임베딩 계산, request queue 및 batcher 설정
-init_doc_embeddings()
+# Initialize the request queue and batcher.
 request_queue = RequestQueue()
 batcher = Batcher(request_queue)
 
@@ -50,6 +65,5 @@ async def predict(payload: QueryRequest):
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
-        # 로그에 오류 상세 정보를 기록합니다.
         print("Exception in /rag endpoint:", error_msg)
         return {"error": str(e), "traceback": error_msg}, 500

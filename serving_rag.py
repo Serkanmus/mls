@@ -8,12 +8,12 @@ import uvicorn
 import itertools
 from fastapi import Request
 from utils import get_ip, update_env_variable
-# Import load_balancer components (including the lb instance and metric functions)
 from load_balancer import lb as load_balancer_instance, app as lb_app, get_and_reset_request_count
 from app_module import app
+import requests
 
 def run_worker(host: str, port: int, gpu_id: str, dev: bool):
-    # Set the GPU environment variable before any other imports occur.
+    # Set the assigned GPU before any imports that would trigger model loading.
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
     print(f"Worker starting on {host}:{port} using GPU {gpu_id}")
     uvicorn.run(app, host=host, port=port, reload=dev)
@@ -22,20 +22,39 @@ def update_load_balancer_urls(worker_urls):
     load_balancer_instance.worker_urls = worker_urls
     load_balancer_instance.worker_iter = itertools.cycle(worker_urls)
 
+def wait_for_worker_ready(worker_url, timeout=30):
+    """
+    Poll the /health endpoint of the worker until it returns a ready status.
+    """
+    import time
+    start_time = time.time()
+    health_url = worker_url + "/health"
+    while time.time() - start_time < timeout:
+        try:
+            response = requests.get(health_url, timeout=3)
+            if response.status_code == 200 and response.json().get("status") == "ready":
+                print(f"Worker at {worker_url} is ready.")
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
 def dynamic_autoscaler(args, gpu_ids):
     """
-    Dynamic autoscaler thread function that monitors workload demand 
-    (via request count) and adjusts the number of active inference workers.
+    Dynamic autoscaler thread that monitors load (via request count) and adjusts
+    the number of active workers based on demand. Waits for new workers to be healthy
+    before including them in the load balancer.
     """
-    # Configuration parameters for dynamic scaling.
+    # Dynamic scaling parameters.
     min_workers = 1
-    max_workers = len(gpu_ids)  # Maximum workers limited to available GPUs.
-    scale_out_threshold = 10    # If more than 10 requests arrive in the monitoring interval, scale out.
-    scale_in_threshold = 2      # If fewer than 2 requests in the interval, scale in.
-    monitoring_interval = 5     # Interval in seconds for checking workload.
-
-    worker_processes = []       # List of tuples: (process, port)
-    next_port = args.base_port  # Start assigning ports from base_port.
+    max_workers = len(gpu_ids)  # Limited by available GPUs.
+    scale_out_threshold = 10    # If >10 requests within the interval, scale out.
+    scale_in_threshold = 2      # If <2 requests, consider scaling in.
+    monitoring_interval = 5     # Check every 5 seconds.
+    
+    worker_processes = []  # List of tuples: (process, port)
+    next_port = args.base_port
 
     def spawn_worker():
         nonlocal next_port
@@ -44,11 +63,18 @@ def dynamic_autoscaler(args, gpu_ids):
         next_port += 1
         p = multiprocessing.Process(target=run_worker, args=(args.host, port, gpu_id, args.dev))
         p.start()
-        worker_processes.append((p, port))
-        print(f"Spawned worker on port {port} with GPU {gpu_id}")
-        # Update the load balancer's URL list.
-        urls = [f"http://{args.host}:{p_port}" for (_, p_port) in worker_processes]
-        update_load_balancer_urls(urls)
+        new_worker_url = f"http://{args.host}:{port}"
+        # Wait until the worker’s /health endpoint reports ready.
+        if wait_for_worker_ready(new_worker_url):
+            worker_processes.append((p, port))
+            print(f"Spawned worker on port {port} with GPU {gpu_id}")
+            # Update the load balancer with the new list of healthy workers.
+            urls = [f"http://{args.host}:{p_port}" for (_, p_port) in worker_processes]
+            update_load_balancer_urls(urls)
+        else:
+            print(f"Worker on port {port} failed to become healthy; terminating.")
+            p.terminate()
+            p.join()
 
     def kill_worker():
         if worker_processes:
@@ -56,7 +82,6 @@ def dynamic_autoscaler(args, gpu_ids):
             print(f"Terminating worker on port {port}")
             p.terminate()
             p.join()
-            # Update the load balancer's URL list.
             urls = [f"http://{args.host}:{p_port}" for (_, p_port) in worker_processes]
             update_load_balancer_urls(urls)
 
@@ -79,14 +104,13 @@ def dynamic_autoscaler(args, gpu_ids):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Serving_rag launcher with dynamic autoscaling and GPU assignment"
+        description="Serving_rag launcher with dynamic autoscaling, readiness probes, and GPU assignment"
     )
     parser.add_argument("--dev", action="store_true", help="Development mode (enable reload)")
     parser.add_argument("--mode", type=str, choices=["worker", "autoscale", "loadbalancer", "combined"],
                         default="worker", help="Select execution mode")
     parser.add_argument("--host", type=str, default=None, help="IP address to bind the server (auto-detected if not provided)")
     parser.add_argument("--base_port", type=int, default=8777, help="Starting port number for worker servers")
-    # In dynamic autoscale mode, start with the minimum number of workers.
     parser.add_argument("--workers", type=int, default=1, help="Initial number of worker processes in dynamic autoscale mode")
     parser.add_argument("--lb_port", type=int, default=8888, help="Load Balancer port number")
     parser.add_argument("--gpu_ids", type=str, default="0,1,2,3", 
@@ -94,7 +118,7 @@ def main():
     args = parser.parse_args()
 
     gpu_ids = [gpu.strip() for gpu in args.gpu_ids.split(",") if gpu.strip()]
-    if len(gpu_ids) == 0:
+    if not gpu_ids:
         raise ValueError("No GPU IDs provided via --gpu_ids")
 
     if args.host is None:
@@ -125,16 +149,16 @@ def main():
                 p.terminate()
     elif args.mode == "loadbalancer":
         print(f"[Load Balancer mode] Running load balancer on {args.host}:{args.lb_port}")
-        # In loadbalancer mode, assume workers are launched separately.
+        # Assume workers are launched separately.
         worker_urls = [f"http://{args.host}:{args.base_port + i}" for i in range(args.workers)]
         update_load_balancer_urls(worker_urls)
         uvicorn.run(lb_app, host=args.host, port=args.lb_port, reload=args.dev)
     elif args.mode == "combined":
         print("[Combined mode] Running dynamic autoscaler with load balancer concurrently")
-        # Launch the dynamic autoscaler in a daemon thread.
+        # Run the dynamic autoscaler in a daemon thread.
         autoscaler_thread = threading.Thread(target=dynamic_autoscaler, args=(args, gpu_ids), daemon=True)
         autoscaler_thread.start()
-        # Start the load balancer (which is responsible for routing requests to current workers).
+        # Start the load balancer, which routes requests to workers.
         uvicorn.run(lb_app, host=args.host, port=args.lb_port, reload=args.dev)
 
 if __name__ == "__main__":
@@ -142,6 +166,5 @@ if __name__ == "__main__":
     try:
         multiprocessing.set_start_method("spawn")
     except RuntimeError:
-        # Ignore if already set.
         pass
     main()
